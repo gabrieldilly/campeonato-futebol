@@ -4,14 +4,15 @@
 #include <sys/socket.h>
 #include <arpa/inet.h>
 #include <netinet/in.h>
+#include <time.h>
 
 #define NRCON 5    /* Numero de conexoes */
 #define BUFFSIZE 128
-//#define ADDRESS "172.16.34.116"
 #define ADDRESS "127.0.0.1"
 #define PORTA 5001
 #define NRTIMES 6
 #define SALDO_INICIAL 100.00
+#define PROB_DESONESTA 0.025
 
 struct Time {
 	char id;
@@ -21,14 +22,26 @@ struct Time {
 	float cotacao;
 } typedef Time;
 
+struct Partida {
+	Time *time_a, *time_b;
+	int gols_a, gols_b;
+	char id_empate;
+	float cotacao_empate;
+} typedef Partida;
+
+struct Rodada {
+	Partida partidas[NRTIMES/2];
+} typedef Rodada;
+
 struct Campeonato {
 	char ip_cliente[15];
 	float saldo;
-	int rodada;
+	int rodada_atual;
+	Rodada rodadas[2 * (NRTIMES - 1)];
 	Time times[NRTIMES];
 } typedef Campeonato;
 
-int num_campeonatos = 0;
+int num_campeonatos = 0, desonesto = 0;
 Campeonato * campeonatos;
 
 int BuscarCampeonato(char * ip_cliente) {
@@ -39,7 +52,6 @@ int BuscarCampeonato(char * ip_cliente) {
 }	
 	
 Campeonato * AlocarCampeonato(char * ip_cliente) {
-	Campeonato * c;
 	int selecionado;
 	
 	if (num_campeonatos == 0) {
@@ -65,7 +77,7 @@ Campeonato * AlocarCampeonato(char * ip_cliente) {
 	
 	strcpy(campeonatos[selecionado].ip_cliente, ip_cliente); 
 	campeonatos[selecionado].saldo = SALDO_INICIAL; 
-	campeonatos[selecionado].rodada = 0; 
+	campeonatos[selecionado].rodada_atual = 0; 
 	
 	campeonatos[selecionado].times[0].id = 'P';
 	campeonatos[selecionado].times[0].pontos = 0;
@@ -110,12 +122,12 @@ void CalcularCotacoes(Time * a, Time * b) {
 			if (i < j) vitoriaB++;
 			total++;
 		}
-	a->cotacao = total / vitoriaA;
-	b->cotacao = total / vitoriaB;
+	a->cotacao = 1 / (vitoriaA / total + desonesto * PROB_DESONESTA);
+	b->cotacao = 1 / (vitoriaB / total + desonesto * PROB_DESONESTA);
 }
 
 float CalcularEmpate(float a, float b) {
-	return 1 / (1 - 1/a - 1/b);
+	return 1 / (1 - 1/a - 1/b + 3 * desonesto * PROB_DESONESTA);
 }
 
 char * MontarTabela(char * ip_cliente) {
@@ -148,7 +160,7 @@ char * MontarRodada(char * ip_cliente) {
 	Campeonato * c;
 	int selecionado, aux;
 	char * s;
-	char t[40];
+	char t[1000];
 	int p[NRTIMES];
 	s = (char *) malloc(NRTIMES * 20 * sizeof(char));
 	if (s == NULL) {
@@ -160,15 +172,15 @@ char * MontarRodada(char * ip_cliente) {
 	if (selecionado != -1) {
 		c = &campeonatos[selecionado];
 
-		if (c->rodada >= 2 * (NRTIMES - 1))
+		if (c->rodada_atual >= 2 * (NRTIMES - 1))
 			strcpy(s, "! Erro: campeonato terminou.");
 		else {
 			s[0] = '\0';
 			p[0] = 0;
 			for (int i = 1; i < NRTIMES; i++)
-				p[1 + ((c->rodada + i - 1) % (NRTIMES - 1))] = i;
+				p[1 + ((c->rodada_atual + i - 1) % (NRTIMES - 1))] = i;
 			
-			if (c->rodada >= NRTIMES - 1)
+			if (c->rodada_atual >= NRTIMES - 1)
 				for (int i = 0; i < NRTIMES; i = i + 2) {
 					aux = p[i];
 					p[i] = p[i + 1];
@@ -176,6 +188,12 @@ char * MontarRodada(char * ip_cliente) {
 				}	
 			for (int i = 0; i < NRTIMES; i = i + 2) {
 				CalcularCotacoes(&(c->times[p[i]]), &(c->times[p[i + 1]]));
+
+				c->rodadas[c->rodada_atual].partidas[i/2].time_a = &(c->times[p[i]]);
+				c->rodadas[c->rodada_atual].partidas[i/2].time_b = &(c->times[p[i + 1]]);
+				c->rodadas[c->rodada_atual].partidas[i/2].id_empate = 'W' + i/2;
+				c->rodadas[c->rodada_atual].partidas[i/2].cotacao_empate = CalcularEmpate(c->times[p[i]].cotacao, c->times[p[i + 1]].cotacao);
+
 				sprintf(t, "%c %s %.2f %c %s %.2f %c %.2f\n", 
 						c->times[p[i]].id, c->times[p[i]].nome, c->times[p[i]].cotacao, 
 						c->times[p[i + 1]].id, c->times[p[i + 1]].nome, c->times[p[i + 1]].cotacao, 
@@ -186,22 +204,134 @@ char * MontarRodada(char * ip_cliente) {
 	} else
 		strcpy(s, "! Erro: cliente não iniciou o jogo.");	
 	
-	//c->rodada++;
+	return s;
+}
+
+Partida * BuscarPartida(char * ip_cliente, char id) {
+	Campeonato * c;
+	int selecionado;
+	Partida * p = NULL;
+	char * s;
+	
+	selecionado = BuscarCampeonato(ip_cliente);
+	
+	if (selecionado != -1) {
+		s = MontarRodada(ip_cliente);
+		free(s);
+		c = &campeonatos[selecionado];
+		for (int i = 0; i < NRTIMES; i = i + 2)
+			if (c->rodadas[c->rodada_atual].partidas[i/2].time_a->id == id 
+			 || c->rodadas[c->rodada_atual].partidas[i/2].time_b->id == id 
+			 || c->rodadas[c->rodada_atual].partidas[i/2].id_empate == id)
+				p = &(c->rodadas[c->rodada_atual].partidas[i/2]);
+	}
+	
+	return p;
+}
+
+char * ApostarPartida(char * ip_cliente, Partida * p, char id, float valor) {
+	Campeonato * c;
+	Partida * partida;
+	int selecionado;
+	char * s;
+	s = (char *) malloc(120 * sizeof(char));
+	if (s == NULL) {
+		perror("Erro de alocação de memória");
+		exit(-1);
+	}
+	selecionado = BuscarCampeonato(ip_cliente);
+	
+	if (selecionado != -1) {
+		c = &campeonatos[selecionado];
+
+		if (valor <= c->saldo) {
+			
+			c->saldo -= valor;
+			
+			for (int i = 0; i < NRTIMES; i = i + 2) {
+				partida = &(c->rodadas[c->rodada_atual].partidas[i/2]);
+		
+				partida->gols_a = (rand() % (4 + partida->time_a->ganhou));
+				partida->gols_b = (rand() % (4 + partida->time_b->ganhou));
+				printf("Placar: %s %d x %d %s\n", partida->time_a->nome, partida->gols_a, partida->gols_b, partida->time_b->nome);
+					
+				if (partida->gols_a > partida->gols_b) {
+					partida->time_a->pontos += 3;
+					partida->time_a->ganhou = 1;
+					partida->time_b->ganhou = -1;
+					if (partida->time_a->id == id) c->saldo += partida->time_a->cotacao * valor;
+					if (partida == p) sprintf(s, "%c %s %.2f     ", partida->time_a->id, partida->time_a->nome, c->saldo);
+				}
+				else if (partida->gols_b > partida->gols_a) {
+					partida->time_b->pontos += 3;
+					partida->time_b->ganhou = 1;
+					partida->time_a->ganhou = -1;
+					if (partida->time_b->id == id) c->saldo += partida->time_b->cotacao * valor;
+					if (partida == p) sprintf(s, "%c %s %.2f     ", partida->time_b->id, partida->time_b->nome, c->saldo);
+				} else if (partida->gols_a == partida->gols_b) {
+					partida->time_a->pontos += 1;
+					partida->time_b->pontos += 1;
+					partida->time_a->ganhou = 0;
+					partida->time_b->ganhou = 0;
+					if (partida->id_empate == id) c->saldo += partida->cotacao_empate * valor;
+					if (partida == p) sprintf(s, "%c %s %.2f    ", partida->id_empate, "Empate", c->saldo);
+				}				
+			}
+			
+			printf("\n");
+			
+			if (c->saldo == 0)
+				strcpy(s, "! Erro: fim de jogo.");	
+			
+			c->rodada_atual++;
+		
+		} else 
+			strcpy(s, "! Erro: saldo insuficiente.");	
+
+	} else
+		strcpy(s, "! Erro: cliente não iniciou o jogo.");	
+
+	return s;
+}
+
+char * TestarPartida(Partida * p) {
+	char * s;
+	float f, f_a, f_b, f_e;
+	
+	s = (char *) malloc(120 * sizeof(char));
+	if (s == NULL) {
+		perror("Erro de alocação de memória");
+		exit(-1);
+	}
+	
+	f = (float) rand()/RAND_MAX;
+	
+	f_a = 1 / p->time_a->cotacao - desonesto * PROB_DESONESTA;
+	f_b = 1 / p->time_b->cotacao - desonesto * PROB_DESONESTA;
+	f_e = 1 / p->cotacao_empate  - desonesto * PROB_DESONESTA;
+	
+	printf("Probabilidades: %.3f %.3f %.3f %.3f\n\n", f, f_a, f_b, f_e);
+	
+	if (f <= f_a)
+		sprintf(s, "%c %s", p->time_a->id, p->time_a->nome);
+	else if (f <= f_a + f_b)
+		sprintf(s, "%c %s", p->time_b->id, p->time_b->nome);
+	else
+		sprintf(s, "%c %s", p->id_empate, "Empate");
 	
 	return s;
 }
 
-void OrdenaTimes(Campeonato * c) {
-	
-}
-
 void TrataCliente(int sock, struct sockaddr_in end_cliente) {
 	Campeonato * c;
+	Partida * p;
 	char buffer[BUFFSIZE];
 	char * ptr;
 	char * ip_cliente = inet_ntoa(end_cliente.sin_addr);
 	int recebido = -1;
 	int clear = 0;
+	char ch;
+	float valor;
 
 	/* Mensagem recebida */
 	if ((recebido = recv(sock, buffer, BUFFSIZE - 1, 0)) < 0) {
@@ -216,19 +346,64 @@ void TrataCliente(int sock, struct sockaddr_in end_cliente) {
 	if (strcmp(ptr, "iniciar") == 0) {
 		c = AlocarCampeonato(ip_cliente);
 		printf("Iniciando jogo do cliente: %s\n\n", ip_cliente);
-		sprintf(ptr, "%.2f", c->saldo);
+		sprintf(ptr, "%.2f  ", c->saldo);
+	
 	} else if (strcmp(ptr, "tabela") == 0) {
 		ptr = MontarTabela(ip_cliente);
 		printf("Retornando a tabela: %s\n\n", ip_cliente);
 		clear = 1;
+	
 	} else if (strcmp(ptr, "rodada") == 0) {
-		ptr = MontarRodada(ip_cliente);
+		ptr = MontarRodada(ip_cliente); 
 		printf("Retornando a rodada: %s\n\n", ip_cliente);
 		clear = 1;
+	
 	} else if (strcmp(ptr, "apostar") == 0) {
 		printf("Realizando aposta: %s\n\n", ip_cliente);
+		ptr = strtok(NULL, " ");
+		if (ptr == NULL) {
+			ptr = (char *) malloc(40 * sizeof(char));
+			strcpy(ptr, "! Erro: mensagem fora do padrão.");
+			clear = 1;
+		} else {
+			ch = ptr[0];
+			ptr = strtok(NULL, " ");
+			if (ptr == NULL) {
+				ptr = (char *) malloc(40 * sizeof(char));
+				strcpy(ptr, "! Erro: mensagem fora do padrão.");
+				clear = 1;
+			} else {
+				p = BuscarPartida(ip_cliente, ch);
+				if (p == NULL) {
+					ptr = (char *) malloc(40 * sizeof(char));
+					strcpy(ptr, "! Erro: partida não encontrada ou cliente não iniciou o jogo.");
+					clear = 1;
+				} else {
+					valor = strtof(ptr, NULL);
+					ptr = ApostarPartida(ip_cliente, p, ch, valor);
+					clear = 1;
+				}
+			}
+		}
+		
 	} else if (strcmp(ptr, "testar") == 0) {
-		printf("Testando aposta: %s\n\n", ip_cliente);
+		printf("Testando aposta: %s\n", ip_cliente);
+		ptr = strtok(NULL, " ");
+		if (ptr == NULL) {
+			ptr = (char *) malloc(40 * sizeof(char));
+			strcpy(ptr, "! Erro: mensagem fora do padrão.");
+			clear = 1;
+		} else {
+			p = BuscarPartida(ip_cliente, ptr[0]);
+			if (p == NULL) {
+				ptr = (char *) malloc(40 * sizeof(char));
+				strcpy(ptr, "! Erro: partida não encontrada ou cliente não iniciou o jogo.");
+				clear = 1;
+			} else {
+				ptr = TestarPartida(p);
+				clear = 1;
+			}
+		}
 	}
 		
 	if (send(sock, ptr, strlen(ptr), 0) != strlen(ptr)) {
@@ -242,6 +417,9 @@ void TrataCliente(int sock, struct sockaddr_in end_cliente) {
 int main(void) {
 	int servidor_socket, cliente_socket;
 	struct sockaddr_in end_servidor, end_cliente;
+	char d = ' ';
+	
+	srand((unsigned) time(NULL));
 
 	if ((servidor_socket = socket(PF_INET, SOCK_STREAM, 0)) < 0) {
 		perror("Erro criação socket");
@@ -265,8 +443,13 @@ int main(void) {
 		perror("Erro no listen");
 		exit(-1);
 	}
+	
+	printf("Deseja iniciar o servidor em modo desonesto (s/N)? ");
+	while (d != 'S' && d != 'N' && d != 's' && d != 'n' && d != '\n')
+		scanf("%c", &d);
+	if (d == 'S' || d == 's') desonesto = 1;
 
-	printf("Servidor rodando em %s:%d\n", inet_ntoa(end_servidor.sin_addr), PORTA);
+	printf("Servidor rodando em %s:%d em modo %s\n", inet_ntoa(end_servidor.sin_addr), PORTA, desonesto ? "desonesto" : "honesto");
 
 	/* Fica em loop infinito recebendo conexões dos clientes */
 	while (1) {
