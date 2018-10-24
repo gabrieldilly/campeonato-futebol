@@ -94,7 +94,7 @@ int lerOpcoesMenu(char *msg){
 	else if (opcao == 3)
 		strcpy(msg,"rodada");
 	else if (opcao == 4)
-		strcpy(msg,"apostar W 60.00");
+		strcpy(msg,"apostar A 14.78");
 	else if (opcao == 5)
 		strcpy(msg,"testar P");
 	else if (opcao != 0)

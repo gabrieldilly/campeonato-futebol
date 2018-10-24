@@ -5,6 +5,7 @@
 #include <arpa/inet.h>
 #include <netinet/in.h>
 #include <time.h>
+#include <math.h>
 
 #define NRCON 5    /* Numero de conexoes */
 #define BUFFSIZE 128
@@ -217,13 +218,15 @@ Partida * BuscarPartida(char * ip_cliente, char id) {
 	
 	if (selecionado != -1) {
 		s = MontarRodada(ip_cliente);
+		//printf("%s\n", s);
 		free(s);
 		c = &campeonatos[selecionado];
-		for (int i = 0; i < NRTIMES; i = i + 2)
-			if (c->rodadas[c->rodada_atual].partidas[i/2].time_a->id == id 
-			 || c->rodadas[c->rodada_atual].partidas[i/2].time_b->id == id 
-			 || c->rodadas[c->rodada_atual].partidas[i/2].id_empate == id)
-				p = &(c->rodadas[c->rodada_atual].partidas[i/2]);
+		if (c->rodada_atual < 2 * (NRTIMES - 1))
+			for (int i = 0; i < NRTIMES; i = i + 2)
+				if (c->rodadas[c->rodada_atual].partidas[i/2].time_a->id == id 
+				 || c->rodadas[c->rodada_atual].partidas[i/2].time_b->id == id 
+				 || c->rodadas[c->rodada_atual].partidas[i/2].id_empate == id)
+					p = &(c->rodadas[c->rodada_atual].partidas[i/2]);
 	}
 	
 	return p;
@@ -244,50 +247,57 @@ char * ApostarPartida(char * ip_cliente, Partida * p, char id, float valor) {
 	if (selecionado != -1) {
 		c = &campeonatos[selecionado];
 
-		if (valor <= c->saldo) {
-			
-			c->saldo -= valor;
-			
-			for (int i = 0; i < NRTIMES; i = i + 2) {
-				partida = &(c->rodadas[c->rodada_atual].partidas[i/2]);
-		
-				partida->gols_a = (rand() % (4 + partida->time_a->ganhou));
-				partida->gols_b = (rand() % (4 + partida->time_b->ganhou));
-				printf("Placar: %s %d x %d %s\n", partida->time_a->nome, partida->gols_a, partida->gols_b, partida->time_b->nome);
-					
-				if (partida->gols_a > partida->gols_b) {
-					partida->time_a->pontos += 3;
-					partida->time_a->ganhou = 1;
-					partida->time_b->ganhou = -1;
-					if (partida->time_a->id == id) c->saldo += partida->time_a->cotacao * valor;
-					if (partida == p) sprintf(s, "%c %s %.2f     ", partida->time_a->id, partida->time_a->nome, c->saldo);
-				}
-				else if (partida->gols_b > partida->gols_a) {
-					partida->time_b->pontos += 3;
-					partida->time_b->ganhou = 1;
-					partida->time_a->ganhou = -1;
-					if (partida->time_b->id == id) c->saldo += partida->time_b->cotacao * valor;
-					if (partida == p) sprintf(s, "%c %s %.2f     ", partida->time_b->id, partida->time_b->nome, c->saldo);
-				} else if (partida->gols_a == partida->gols_b) {
-					partida->time_a->pontos += 1;
-					partida->time_b->pontos += 1;
-					partida->time_a->ganhou = 0;
-					partida->time_b->ganhou = 0;
-					if (partida->id_empate == id) c->saldo += partida->cotacao_empate * valor;
-					if (partida == p) sprintf(s, "%c %s %.2f    ", partida->id_empate, "Empate", c->saldo);
-				}				
-			}
-			
-			printf("\n");
-			
-			if (c->saldo == 0)
-				strcpy(s, "! Erro: fim de jogo.");	
-			
-			c->rodada_atual++;
-		
-		} else 
-			strcpy(s, "! Erro: saldo insuficiente.");	
+		if (c->rodada_atual >= 2 * (NRTIMES - 1))
+			strcpy(s, "! Erro: campeonato terminou.");
+		else if (p == NULL)
+			strcpy(s, "! Erro: partida não encontrada ou cliente não iniciou o jogo.");
+		else {
+			printf("Rodada atual: %d\n", c->rodada_atual + 1);
 
+			if (valor <= c->saldo) {
+				
+				c->saldo -= valor;
+				
+				for (int i = 0; i < NRTIMES; i = i + 2) {
+					partida = &(c->rodadas[c->rodada_atual].partidas[i/2]);
+			
+					partida->gols_a = (rand() % (4 + partida->time_a->ganhou));
+					partida->gols_b = (rand() % (4 + partida->time_b->ganhou));
+					printf("Placar: %s %d x %d %s\n", partida->time_a->nome, partida->gols_a, partida->gols_b, partida->time_b->nome);
+						
+					if (partida->gols_a > partida->gols_b) {
+						partida->time_a->pontos += 3;
+						partida->time_a->ganhou = 1;
+						partida->time_b->ganhou = -1;
+						if (partida->time_a->id == id) c->saldo += ((int) 100 * partida->time_a->cotacao * valor) / 100.00;
+						if (partida == p) sprintf(s, "%c %s %.2f     ", partida->time_a->id, partida->time_a->nome, c->saldo);
+					}
+					else if (partida->gols_b > partida->gols_a) {
+						partida->time_b->pontos += 3;
+						partida->time_b->ganhou = 1;
+						partida->time_a->ganhou = -1;
+						if (partida->time_b->id == id) c->saldo += ((int) 100 * partida->time_b->cotacao * valor) / 100.00;
+						if (partida == p) sprintf(s, "%c %s %.2f     ", partida->time_b->id, partida->time_b->nome, c->saldo);
+					} else if (partida->gols_a == partida->gols_b) {
+						partida->time_a->pontos += 1;
+						partida->time_b->pontos += 1;
+						partida->time_a->ganhou = 0;
+						partida->time_b->ganhou = 0;
+						if (partida->id_empate == id) c->saldo += ((int) 100 * partida->cotacao_empate * valor) / 100.00;
+						if (partida == p) sprintf(s, "%c %s %.2f    ", partida->id_empate, "Empate", c->saldo);
+					}				
+				}
+				
+				printf("\n");
+				
+				if (c->saldo == 0)
+					strcpy(s, "! Erro: fim de jogo.");	
+				
+				c->rodada_atual++;
+			
+			} else 
+				strcpy(s, "! Erro: saldo insuficiente.");	
+		}
 	} else
 		strcpy(s, "! Erro: cliente não iniciou o jogo.");	
 
@@ -374,15 +384,9 @@ void TrataCliente(int sock, struct sockaddr_in end_cliente) {
 				clear = 1;
 			} else {
 				p = BuscarPartida(ip_cliente, ch);
-				if (p == NULL) {
-					ptr = (char *) malloc(40 * sizeof(char));
-					strcpy(ptr, "! Erro: partida não encontrada ou cliente não iniciou o jogo.");
-					clear = 1;
-				} else {
-					valor = strtof(ptr, NULL);
-					ptr = ApostarPartida(ip_cliente, p, ch, valor);
-					clear = 1;
-				}
+				valor = strtof(ptr, NULL);
+				ptr = ApostarPartida(ip_cliente, p, ch, valor);
+				clear = 1;
 			}
 		}
 		
@@ -396,7 +400,7 @@ void TrataCliente(int sock, struct sockaddr_in end_cliente) {
 		} else {
 			p = BuscarPartida(ip_cliente, ptr[0]);
 			if (p == NULL) {
-				ptr = (char *) malloc(40 * sizeof(char));
+				ptr = (char *) malloc(80 * sizeof(char));
 				strcpy(ptr, "! Erro: partida não encontrada ou cliente não iniciou o jogo.");
 				clear = 1;
 			} else {
